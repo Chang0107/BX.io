@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台鐵風行程顯示板 v18.8-remarkfix</title>
+<style>
+html,body{
+  margin:0;padding:0;height:100vh;
+  background:black;color:#ffff80;
+  font-family:"DFKai-SB","PMingLiU",serif;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+
+/* 桌機：左右排列 */
+#main{flex:1;display:flex;flex-direction:row;overflow:hidden;}
+#clock-container{
+  flex:4;display:flex;flex-direction:column;justify-content:center;align-items:center;
+  border-right:2px solid #333;
+}
+#analog-clock{
+  width:42vmin;height:42vmin;border:6px solid #ffff80;border-radius:50%;
+  position:relative;background:black;
+}
+.tick{position:absolute;width:3%;height:8%;background:#ffff80;top:2%;left:48.5%;transform-origin:50% 600%;}
+.hand{position:absolute;top:50%;left:50%;transform-origin:50% 100%;background:#ffff80;border-radius:2px;transform:translate(-50%,-100%) rotate(0deg);}
+.hour{width:1.2%;height:25%;}
+.minute{width:0.7%;height:35%;}
+.second{width:0.3%;height:40%;background:#ff5050;}
+#datetime{margin-top:1.2vh;font-size:1.4vw;color:#ccccff;}
+/* 時鐘下方文字：預設不放內容，想顯示自行填入 innerText */
+#clock-subtext{margin-top:0.6vh;font-size:0.95vw;color:#999;letter-spacing:.4px}
+
+/* 行程區 */
+#schedule{flex:6;padding:2vw;overflow-y:auto;overflow-x:hidden;position:relative;}
+#title{font-size:2vw;color:#00ffff;margin-bottom:1vw;border-bottom:1px solid #333;padding-bottom:0.4vw;}
+#last-update{position:absolute;top:0.5vw;right:1.5vw;font-size:1vw;color:#888;}
+table{width:100%;border-collapse:collapse;table-layout:fixed;}
+th,td{ text-align:left;padding:0.4vw 0.6vw;font-size:1.35vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+th{color:#999;border-bottom:1px solid #333;}
+td{border-bottom:1px dotted #333;}
+.date{color:#00ff66;width:18%;}
+.time{color:#ff5555;width:16%;}
+.title{width:30%;cursor:pointer;}
+.place{color:#00ff66;width:18%;}
+
+/* 備註：單行、溢出隱藏（動畫由 JS 控制） */
+.remark{width:18%;color:#ffcc00;overflow:hidden;white-space:nowrap;position:relative;}
+.remark span{
+  display:inline-block;position:relative;left:100%;
+  will-change:transform;transform:translateZ(0);
+  transition:transform 0s linear;
+}
+
+.past td{color:#666!important;opacity:.6;text-decoration:line-through;}
+.mainCal .title{color:#ffb347;}
+.subCal .title{color:#66ccff;}
+.fadein-row{opacity:0;animation:fadeInRow .6s ease forwards;}
+@keyframes fadeInRow{from{opacity:0;}to{opacity:1;}}
+
+/* 跑馬燈：播放時靠左、播完或點一下置中；再點一次重播 */
+#marquee{
+  height:6vh;background:#111;color:#ffcc00;font-size:1.8vw;
+  display:flex;align-items:center;justify-content:flex-start;
+  overflow:hidden;border-top:2px solid #333;cursor:pointer;padding-left:2vw;
+}
+#marquee.centered{justify-content:center;padding-left:0;}
+#marquee span{display:inline-block;white-space:nowrap;transform:translateX(100%);animation:slide 25s linear forwards;}
+@keyframes slide{from{transform:translateX(100%);}to{transform:translateX(-100%);}}
+
+/* 手機版：上下排、可滑動、隱藏更新時間 */
+@media screen and (max-width:900px){
+  html,body{overflow:auto;}
+  #main{flex-direction:column;}
+  #clock-container{border-right:none;border-bottom:2px solid #333;padding:4vh 0 3vh 0;}
+  #analog-clock{width:65vw;height:65vw;}
+  #datetime{font-size:4vw;margin-top:2vh;}
+  #clock-subtext{font-size:3.2vw;margin-top:1vh;}
+  #schedule{padding:5vw;}
+  #title{font-size:5vw;text-align:center;margin-top:4vw;}
+  #last-update{display:none;}
+  th,td{font-size:3.4vw;}
+  #marquee{font-size:4vw;height:8vh;}
+}
+
+/* 詳細視窗 */
+#popup{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);display:none;justify-content:center;align-items:center;z-index:1000;}
+#popup-content{background:rgba(50,50,50,.9);color:#fff;padding:1.5vw 2vw;border-radius:10px;width:50vw;max-width:600px;text-align:left;font-size:1.2vw;line-height:1.6;animation:fadeIn .4s ease;}
+#popup-content h3{color:#ffcc00;margin-top:0;}
+#popup-close{position:absolute;top:2vh;right:3vw;color:#aaa;font-size:2vw;cursor:pointer;}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+</style>
+</head>
+<body>
+<div id="main">
+  <div id="clock-container">
+    <div id="analog-clock"></div>
+    <div id="datetime"></div>
+    <div id="clock-subtext"></div>
+  </div>
+  <div id="schedule">
+    <div id="title">近日行程</div>
+    <div id="last-update"></div>
+    <table id="event-table">
+      <tr><th>日期</th><th>時間</th><th>活動</th><th>地點</th><th>備註</th></tr>
+    </table>
+  </div>
+</div>
+<div id="marquee"><span id="marquee-text">載入中...</span></div>
+
+<!-- 詳細視窗 -->
+<div id="popup">
+  <div id="popup-content">
+    <div id="popup-close">×</div>
+    <h3 id="popup-title"></h3>
+    <p id="popup-detail"></p>
+  </div>
+</div>
+
+<script>
+const API_KEY="AIzaSyBo9YC4q0Rg3Nqqngr11hCC7hXO0zxPXsA";
+const CALENDARS=[
+ {id:"ttcps100353@gmail.com",cls:"mainCal"},
+ {id:"c1edf32d2aa594e6667a6b08312cf066802636c1c48992b1d6b2c39cf01d79a4@group.calendar.google.com",cls:"subCal"}
+];
+let lastDataHash="",marqueeText="",weatherInfo="";
+let marqueeRunning=true, marqueeCentered=false;
+
+/* ===== 時鐘 ===== */
+function initClock(){
+  const clock=document.getElementById("analog-clock");
+  for(let i=0;i<12;i++){const t=document.createElement("div");t.className="tick";t.style.transform=`rotate(${i*30}deg)`;clock.appendChild(t);}
+  ["hour","minute","second"].forEach(id=>{const h=document.createElement("div");h.id=id+"-hand";h.className="hand "+id;clock.appendChild(h);});
+}
+function updateClock(){
+  const now=new Date(),h=now.getHours(),m=now.getMinutes(),s=now.getSeconds();
+  document.getElementById("hour-hand").style.transform=`translate(-50%,-100%) rotate(${(h%12)*30+m*0.5}deg)`;
+  document.getElementById("minute-hand").style.transform=`translate(-50%,-100%) rotate(${m*6+s*0.1}deg)`;
+  document.getElementById("second-hand").style.transform=`translate(-50%,-100%) rotate(${s*6}deg)`;
+  document.getElementById("datetime").textContent=
+    now.toLocaleString("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit",weekday:"short",hour:"2-digit",minute:"2-digit"});
+  requestAnimationFrame(updateClock);
+}
+
+/* ===== 行程（資料與 DOM 結構維持不變） ===== */
+async function fetchEvents(){
+  try{
+    const now=new Date(),end=new Date();end.setDate(now.getDate()+7);
+    let all=[];
+    for(const cal of CALENDARS){
+      const url=`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?key=${API_KEY}&timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`;
+      const res=await fetch(url);const data=await res.json();
+      if(data.items){data.items.forEach(ev=>ev._calendarClass=cal.cls);all=all.concat(data.items);}
+    }
+    all.sort((a,b)=>new Date(a.start.dateTime||a.start.date)-new Date(b.start.dateTime||b.start.date));
+    const hash=all.map(e=>`${e.summary}|${e.start.dateTime||e.start.date}`).join("||");
+    if(hash!==lastDataHash){lastDataHash=hash;render(all);}
+  }catch(e){console.error("行程載入失敗：",e);}
+}
+function render(events){
+  const table=document.getElementById("event-table");
+  table.innerHTML='<tr><th>日期</th><th>時間</th><th>活動</th><th>地點</th><th>備註</th></tr>';
+  const now=new Date();let nextE=null;
+  events.slice(0,10).forEach((e,i)=>{
+    const s=new Date(e.start.dateTime||e.start.date);
+    const end=e.end?.dateTime?new Date(e.end.dateTime):null;
+    const date=s.toLocaleDateString("zh-TW",{month:"2-digit",day:"2-digit",weekday:"short"});
+    const time=e.start.dateTime?s.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"}):"整天";
+    let title=e.summary||"—",remark=e.description?.split("\n")[0]||"—";
+    const match=title.match(/^\[(.*?)\]\s*(.*)$/); if(match){title=match[1];remark=match[2]||remark;}
+    const loc=e.location||"—"; const past=end?end<now:s<now;
+
+    const tr=document.createElement("tr");
+    tr.className=(past?"past ":"")+e._calendarClass+" fadein-row";
+    tr.style.animationDelay=`${i*0.1}s`;
+    tr.innerHTML=`<td class="date">${date}</td><td class="time">${time}</td>
+      <td class="title">${title}</td><td class="place">${loc}</td>
+      <td class="remark"><span>${remark}</span></td>`;
+    tr.querySelector(".title").onclick=()=>showPopup(title,time,loc,remark);
+    table.appendChild(tr);
+    if(!nextE&&s>now)nextE=e;
+  });
+
+  document.getElementById("last-update").textContent="更新時間："+new Date().toLocaleString("zh-TW",{hour12:false});
+  const nextText=nextE?`下一場活動：${nextE.summary}，開始時間 ${new Date(nextE.start.dateTime||nextE.start.date).toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"})}`:"所有行程皆已結束";
+  marqueeText=`${nextText} ｜ ${weatherInfo}`;
+  restartMarquee();
+
+  // 啟動備註動畫（固定速度、單次播放、停在可見範圍）
+  startRemarkAnimations();
+}
+
+/* ===== 備註動畫：固定速度(80px/s)、只跑一次、停在可見範圍（穩定量測版） ===== */
+let remarkResizeTimer=null;
+function startRemarkAnimations(){
+  const SPEED = 80; // px/s  ← 你要求的速度
+  document.querySelectorAll(".remark span").forEach(span=>{
+    span.style.transition="none";
+    span.style.transform="translateX(0)";
+  });
+
+  requestAnimationFrame(()=>{
+    document.querySelectorAll(".remark span").forEach(span=>{
+      const parent = span.parentElement;
+
+      const parentRect = parent.getBoundingClientRect();
+      const spanRect   = span.getBoundingClientRect();
+
+      const parentW = Math.floor(parentRect.width);
+      const spanW   = Math.ceil(spanRect.width);
+
+      const distance = Math.max(0, spanW - parentW + 1); // +1 緩衝，避免 DPI 捨入切字
+      if(distance > 0){
+        const duration = distance / SPEED;
+        void span.offsetWidth;
+        span.style.transition = `transform ${duration}s linear`;
+        requestAnimationFrame(()=>{
+          span.style.transform = `translateX(-${distance}px)`;
+        });
+      }
+    });
+  });
+}
+function scheduleRecalc(){
+  clearTimeout(remarkResizeTimer);
+  remarkResizeTimer = setTimeout(startRemarkAnimations, 150);
+}
+window.addEventListener('resize', scheduleRecalc, {passive:true});
+window.addEventListener('orientationchange', scheduleRecalc, {passive:true});
+window.addEventListener('pageshow', scheduleRecalc, {passive:true});
+if(document.fonts && document.fonts.ready){ document.fonts.ready.then(scheduleRecalc); }
+
+/* ===== 詳細視窗 ===== */
+function showPopup(title,time,place,remark){
+  document.getElementById("popup").style.display="flex";
+  document.getElementById("popup-title").textContent=title;
+  document.getElementById("popup-detail").innerHTML=`<b>時間：</b>${time}<br><b>地點：</b>${place}<br><b>備註：</b>${remark}`;
+}
+document.getElementById("popup-close").onclick=()=>document.getElementById("popup").style.display="none";
+document.getElementById("popup").onclick=e=>{if(e.target.id==="popup")document.getElementById("popup").style.display="none";};
+
+/* ===== 跑馬燈：播完或點一下置中；再點一次重播 ===== */
+function restartMarquee(){
+  const wrap=document.getElementById("marquee");
+  const text=document.getElementById("marquee-text");
+  wrap.classList.remove('centered'); marqueeCentered=false;
+
+  text.style.animation="none"; void text.offsetWidth;
+  text.style.transform="translateX(100%)";
+  text.textContent=marqueeText;
+
+  if(marqueeRunning){
+    text.style.animation="slide 25s linear forwards";
+    text.onanimationend=()=>{
+      text.style.animation="none"; text.style.transform="none";
+      wrap.classList.add('centered'); marqueeCentered=true;
+    };
+  }else{
+    text.style.animation="none"; text.style.transform="none";
+    wrap.classList.add('centered'); marqueeCentered=true;
+  }
+}
+document.getElementById("marquee").onclick=()=>{
+  const wrap=document.getElementById("marquee");
+  const text=document.getElementById("marquee-text");
+  if(!marqueeCentered){
+    marqueeRunning=false; text.style.animation="none"; text.style.transform="none";
+    wrap.classList.add('centered'); marqueeCentered=true;
+  }else{
+    marqueeRunning=true; restartMarquee();
+  }
+};
+
+/* ===== 天氣 ===== */
+async function fetchWeather(){
+  try{
+    const res=await fetch("https://api.open-meteo.com/v1/forecast?latitude=25.05&longitude=121.53&current_weather=true");
+    const data=await res.json();const w=data.current_weather;
+    weatherInfo=`台北市天氣：${w.temperature}°C，風速 ${w.windspeed}m/s`;
+  }catch{weatherInfo="天氣資訊載入失敗";}
+}
+
+/* ===== 啟動 ===== */
+initClock();updateClock();
+fetchWeather().then(fetchEvents);
+setInterval(fetchEvents,30000);
+setInterval(fetchWeather,1800000);
+</script>
+</body>
+</html>
